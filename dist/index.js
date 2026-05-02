@@ -117,30 +117,33 @@ async function getFrontmostBundleId() {
   return stdout;
 }
 var TMUX_TERMINAL_PREFIXES = ["tmux", "screen"];
-function resolveTerminalName(raw) {
+var defaultTmuxResolver = () => {
+  if (!process.env.TMUX)
+    return null;
+  try {
+    const proc = Bun.spawnSync([
+      "tmux",
+      "list-clients",
+      "-F",
+      "#{client_termname}"
+    ]);
+    if (proc.exitCode === 0 && proc.stdout) {
+      const output = new TextDecoder().decode(proc.stdout).trim();
+      const firstLine = output.split(`
+`)[0] ?? "";
+      const cleaned = firstLine.replace(/^xterm-/, "");
+      return cleaned || null;
+    }
+  } catch {}
+  return null;
+};
+function resolveTerminalName(raw, resolveTmux = defaultTmuxResolver) {
   const lower = raw.toLowerCase();
   if (!TMUX_TERMINAL_PREFIXES.some((p) => lower.startsWith(p))) {
     return raw;
   }
-  if (process.env.TMUX) {
-    try {
-      const proc = Bun.spawnSync([
-        "tmux",
-        "list-clients",
-        "-F",
-        "#{client_termname}"
-      ]);
-      if (proc.exitCode === 0 && proc.stdout) {
-        const output = new TextDecoder().decode(proc.stdout).trim();
-        const firstLine = output.split(`
-`)[0] ?? "";
-        const cleaned = firstLine.replace(/^xterm-/, "");
-        if (cleaned)
-          return cleaned;
-      }
-    } catch {}
-  }
-  return null;
+  const outer = resolveTmux();
+  return outer || null;
 }
 function detectTerminalInfo(config) {
   let terminalName = null;

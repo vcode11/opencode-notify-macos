@@ -22,7 +22,8 @@ interface TerminalInfo {
 export declare const VALID_MAC_SOUNDS: Set<string>;
 export declare const DEFAULT_CONFIG: NotifyConfig;
 type RecentNotifications = Map<string, number>;
-export declare function resolveTerminalName(raw: string): string | null;
+export type TmuxClientResolver = () => string | null;
+export declare function resolveTerminalName(raw: string, resolveTmux?: TmuxClientResolver): string | null;
 export declare function detectTerminalInfo(config: NotifyConfig): TerminalInfo;
 export declare function isQuietHours(config: NotifyConfig): boolean;
 export declare function escapeAppleScriptString(str: string): string;

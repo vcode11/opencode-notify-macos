@@ -169,30 +169,38 @@ async function getFrontmostBundleId(): Promise<string | null> {
 
 const TMUX_TERMINAL_PREFIXES = ["tmux", "screen"]
 
-export function resolveTerminalName(raw: string): string | null {
+export type TmuxClientResolver = () => string | null
+
+const defaultTmuxResolver: TmuxClientResolver = () => {
+  if (!process.env.TMUX) return null
+  try {
+    const proc = Bun.spawnSync([
+      "tmux",
+      "list-clients",
+      "-F",
+      "#{client_termname}",
+    ])
+    if (proc.exitCode === 0 && proc.stdout) {
+      const output = new TextDecoder().decode(proc.stdout).trim()
+      const firstLine = output.split("\n")[0] ?? ""
+      const cleaned = firstLine.replace(/^xterm-/, "")
+      return cleaned || null
+    }
+  } catch {}
+  return null
+}
+
+export function resolveTerminalName(
+  raw: string,
+  resolveTmux: TmuxClientResolver = defaultTmuxResolver,
+): string | null {
   const lower = raw.toLowerCase()
   if (!TMUX_TERMINAL_PREFIXES.some((p) => lower.startsWith(p))) {
     return raw
   }
 
-  if (process.env.TMUX) {
-    try {
-      const proc = Bun.spawnSync([
-        "tmux",
-        "list-clients",
-        "-F",
-        "#{client_termname}",
-      ])
-      if (proc.exitCode === 0 && proc.stdout) {
-        const output = new TextDecoder().decode(proc.stdout).trim()
-        const firstLine = output.split("\n")[0] ?? ""
-        const cleaned = firstLine.replace(/^xterm-/, "")
-        if (cleaned) return cleaned
-      }
-    } catch {}
-  }
-
-  return null
+  const outer = resolveTmux()
+  return outer || null
 }
 
 export function detectTerminalInfo(config: NotifyConfig): TerminalInfo {

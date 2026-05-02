@@ -227,22 +227,24 @@ describe("resolveTerminalName", () => {
     expect(resolveTerminalName("wezterm")).toBe("wezterm")
   })
 
-  test("resolves tmux terminal via tmux list-clients when in tmux", () => {
-    const result = resolveTerminalName("tmux-256color")
-    if (process.env.TMUX) {
-      expect(result).toBe("ghostty")
-    } else {
-      expect(result).toBeNull()
-    }
+  test("resolves tmux terminal via resolver", () => {
+    const resolver = () => "ghostty"
+    expect(resolveTerminalName("tmux-256color", resolver)).toBe("ghostty")
   })
 
-  test("resolves screen terminal via tmux list-clients when in tmux", () => {
-    const result = resolveTerminalName("screen-256color")
-    if (process.env.TMUX) {
-      expect(result).toBe("ghostty")
-    } else {
-      expect(result).toBeNull()
-    }
+  test("resolves screen terminal via resolver", () => {
+    const resolver = () => "ghostty"
+    expect(resolveTerminalName("screen-256color", resolver)).toBe("ghostty")
+  })
+
+  test("returns null when resolver returns null", () => {
+    const resolver = () => null
+    expect(resolveTerminalName("tmux-256color", resolver)).toBeNull()
+  })
+
+  test("returns null when resolver returns empty string", () => {
+    const resolver = () => ""
+    expect(resolveTerminalName("tmux-256color", resolver)).toBeNull()
   })
 })
 
