@@ -203,13 +203,10 @@ async function sendNotification(options) {
   const escapedSound = escapeAppleScriptString(sound);
   const script = `display notification "${escapedMessage}" with title "${escapedTitle}" sound name "${escapedSound}"`;
   try {
-    const proc = Bun.spawn(["osascript"], {
-      stdin: "pipe",
+    const proc = Bun.spawn(["bash", "-c", `osascript -e '${script.replace(/'/g, `'"'"'`)}'`], {
       stdout: "ignore",
       stderr: "pipe"
     });
-    proc.stdin.write(script);
-    proc.stdin.end();
     const exitCode = await proc.exited;
     if (exitCode !== 0) {
       const stderr = await new Response(proc.stderr).text();
