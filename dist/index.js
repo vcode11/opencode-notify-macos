@@ -46,6 +46,18 @@ var TERMINAL_PROCESS_NAMES = {
   vscode: "Code",
   "vscode-insiders": "Code - Insiders"
 };
+var TERMINAL_BUNDLE_IDS = {
+  Ghostty: "com.mitchellh.ghostty",
+  kitty: "net.kovidgoyal.kitty",
+  iTerm2: "com.googlecode.iterm2",
+  WezTerm: "com.github.wez.wezterm",
+  Alacritty: "org.alacritty",
+  Terminal: "com.apple.Terminal",
+  Hyper: "co.zeit.hyper",
+  Warp: "dev.warp.Warp-Stable",
+  Code: "com.microsoft.VSCode",
+  "Code - Insiders": "com.microsoft.VSCodeInsiders"
+};
 var DEDEPE_MAP_MAX_SIZE = 1000;
 var QUESTION_DEDUPE_WINDOW_MS = 1500;
 var READY_DEDUPE_WINDOW_MS = 1500;
@@ -79,22 +91,30 @@ async function loadConfig() {
     return DEFAULT_CONFIG;
   }
 }
-async function runOsascript(script) {
-  if (process.platform !== "darwin")
-    return null;
+async function runCommand(command) {
   try {
-    const proc = Bun.spawn(["osascript", "-e", script], {
+    const proc = Bun.spawn(command, {
       stdout: "pipe",
       stderr: "pipe"
     });
-    const output = await new Response(proc.stdout).text();
-    return output.trim();
+    const stdout = await new Response(proc.stdout).text();
+    const exitCode = await proc.exited;
+    return { stdout: stdout.trim(), exitCode };
   } catch {
-    return null;
+    return { stdout: "", exitCode: 1 };
   }
 }
-async function getFrontmostApp() {
-  return runOsascript('tell application "System Events" to get name of first application process whose frontmost is true');
+async function getFrontmostBundleId() {
+  if (process.platform !== "darwin")
+    return null;
+  const { stdout, exitCode } = await runCommand([
+    "bash",
+    "-c",
+    `FRONT=$(lsappinfo front 2>/dev/null); [ -n "$FRONT" ] && lsappinfo info "$FRONT" 2>/dev/null | grep -o 'bundleID="[^"]*"'> /dev/stdout | head -1 | tr -d bundleID= | tr -d '"'`
+  ]);
+  if (exitCode !== 0 || !stdout)
+    return null;
+  return stdout;
 }
 function detectTerminalInfo(config) {
   let terminalName = null;
@@ -104,20 +124,21 @@ function detectTerminalInfo(config) {
     terminalName = config.terminal || null;
   }
   if (!terminalName) {
-    return { name: null, processName: null };
+    return { name: null, processName: null, bundleId: null };
   }
   const processName = TERMINAL_PROCESS_NAMES[terminalName.toLowerCase()] || terminalName;
-  return { name: terminalName, processName };
+  const bundleId = TERMINAL_BUNDLE_IDS[processName] ?? null;
+  return { name: terminalName, processName, bundleId };
 }
 async function isTerminalFocused(terminalInfo) {
-  if (!terminalInfo.processName)
+  if (!terminalInfo.bundleId)
     return false;
   if (process.platform !== "darwin")
     return false;
-  const frontmost = await getFrontmostApp();
+  const frontmost = await getFrontmostBundleId();
   if (!frontmost)
     return false;
-  return frontmost.toLowerCase() === terminalInfo.processName.toLowerCase();
+  return frontmost === terminalInfo.bundleId;
 }
 function isQuietHours(config) {
   if (!config.quietHours.enabled)
@@ -145,10 +166,13 @@ async function sendNotification(options) {
   const escapedSound = escapeAppleScriptString(sound);
   const script = `display notification "${escapedMessage}" with title "${escapedTitle}" sound name "${escapedSound}"`;
   try {
-    const proc = Bun.spawn(["osascript", "-e", script], {
+    const proc = Bun.spawn(["osascript"], {
+      stdin: "pipe",
       stdout: "ignore",
       stderr: "pipe"
     });
+    proc.stdin.write(script);
+    proc.stdin.end();
     const exitCode = await proc.exited;
     if (exitCode !== 0) {
       const stderr = await new Response(proc.stderr).text();

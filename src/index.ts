@@ -28,6 +28,7 @@ interface NotifyConfig {
 interface TerminalInfo {
   name: string | null
   processName: string | null
+  bundleId: string | null
 }
 
 const VALID_MAC_SOUNDS = new Set([
@@ -74,6 +75,19 @@ const TERMINAL_PROCESS_NAMES: Record<string, string> = {
   warp: "Warp",
   vscode: "Code",
   "vscode-insiders": "Code - Insiders",
+}
+
+const TERMINAL_BUNDLE_IDS: Record<string, string> = {
+  Ghostty: "com.mitchellh.ghostty",
+  kitty: "net.kovidgoyal.kitty",
+  iTerm2: "com.googlecode.iterm2",
+  WezTerm: "com.github.wez.wezterm",
+  Alacritty: "org.alacritty",
+  Terminal: "com.apple.Terminal",
+  Hyper: "co.zeit.hyper",
+  Warp: "dev.warp.Warp-Stable",
+  Code: "com.microsoft.VSCode",
+  "Code - Insiders": "com.microsoft.VSCodeInsiders",
 }
 
 const DEDEPE_MAP_MAX_SIZE = 1000
@@ -124,24 +138,33 @@ async function loadConfig(): Promise<NotifyConfig> {
   }
 }
 
-async function runOsascript(script: string): Promise<string | null> {
-  if (process.platform !== "darwin") return null
+async function runCommand(
+  command: string[],
+): Promise<{ stdout: string; exitCode: number }> {
   try {
-    const proc = Bun.spawn(["osascript", "-e", script], {
+    const proc = Bun.spawn(command, {
       stdout: "pipe",
       stderr: "pipe",
     })
-    const output = await new Response(proc.stdout).text()
-    return output.trim()
+    const stdout = await new Response(proc.stdout).text()
+    const exitCode = await proc.exited
+    return { stdout: stdout.trim(), exitCode }
   } catch {
-    return null
+    return { stdout: "", exitCode: 1 }
   }
 }
 
-async function getFrontmostApp(): Promise<string | null> {
-  return runOsascript(
-    'tell application "System Events" to get name of first application process whose frontmost is true',
-  )
+async function getFrontmostBundleId(): Promise<string | null> {
+  if (process.platform !== "darwin") return null
+
+  const { stdout, exitCode } = await runCommand([
+    "bash",
+    "-c",
+    'FRONT=$(lsappinfo front 2>/dev/null); [ -n "$FRONT" ] && lsappinfo info "$FRONT" 2>/dev/null | grep -o \'bundleID="[^"]*"\'> /dev/stdout | head -1 | tr -d bundleID= | tr -d \'"\'',
+  ])
+  if (exitCode !== 0 || !stdout) return null
+
+  return stdout
 }
 
 function detectTerminalInfo(config: NotifyConfig): TerminalInfo {
@@ -152,21 +175,22 @@ function detectTerminalInfo(config: NotifyConfig): TerminalInfo {
     terminalName = config.terminal || null
   }
   if (!terminalName) {
-    return { name: null, processName: null }
+    return { name: null, processName: null, bundleId: null }
   }
   const processName =
     TERMINAL_PROCESS_NAMES[terminalName.toLowerCase()] || terminalName
-  return { name: terminalName, processName }
+  const bundleId = TERMINAL_BUNDLE_IDS[processName] ?? null
+  return { name: terminalName, processName, bundleId }
 }
 
 async function isTerminalFocused(
   terminalInfo: TerminalInfo,
 ): Promise<boolean> {
-  if (!terminalInfo.processName) return false
+  if (!terminalInfo.bundleId) return false
   if (process.platform !== "darwin") return false
-  const frontmost = await getFrontmostApp()
+  const frontmost = await getFrontmostBundleId()
   if (!frontmost) return false
-  return frontmost.toLowerCase() === terminalInfo.processName.toLowerCase()
+  return frontmost === terminalInfo.bundleId
 }
 
 function isQuietHours(config: NotifyConfig): boolean {
@@ -210,10 +234,13 @@ async function sendNotification(options: NotificationOptions): Promise<void> {
   const script = `display notification "${escapedMessage}" with title "${escapedTitle}" sound name "${escapedSound}"`
 
   try {
-    const proc = Bun.spawn(["osascript", "-e", script], {
+    const proc = Bun.spawn(["osascript"], {
+      stdin: "pipe",
       stdout: "ignore",
       stderr: "pipe",
     })
+    proc.stdin.write(script)
+    proc.stdin.end()
     const exitCode = await proc.exited
     if (exitCode !== 0) {
       const stderr = await new Response(proc.stderr).text()
