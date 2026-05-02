@@ -71,6 +71,7 @@ Notifications are attributed to your **terminal app**. If you hear a sound but s
 The plugin automatically:
 
 - Detects your terminal emulator (Ghostty, Kitty, iTerm2, WezTerm, etc.)
+- Resolves nested terminals (tmux, screen) to the outer terminal for accurate focus detection
 - Suppresses notifications when your terminal is the focused app
 - Deduplicates rapid-fire events (1.5s window)
 - Only notifies for parent sessions by default
@@ -120,6 +121,8 @@ Invalid sound names in the config file will log an error at startup.
 Uses [`detect-terminal`](https://github.com/jonschlinkert/detect-terminal) for auto-detection. Supports 37+ terminals including:
 
 Ghostty, Kitty, iTerm2, WezTerm, Alacritty, Hyper, Terminal.app, Warp, VS Code integrated terminal, and more.
+
+**Works inside tmux and screen** — when running inside tmux or screen, the plugin queries the session manager to identify the outer terminal and perform accurate focus detection.
 
 ## Development
 
