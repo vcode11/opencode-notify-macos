@@ -3,8 +3,11 @@ import * as os from "node:os"
 import * as path from "node:path"
 import type { Plugin } from "@opencode-ai/plugin"
 import type { Event } from "@opencode-ai/sdk"
+import type { createOpencodeClient } from "@opencode-ai/sdk"
 // @ts-expect-error - installed at runtime
 import detectTerminal from "detect-terminal"
+
+type OpencodeClient = ReturnType<typeof createOpencodeClient>
 
 interface NotifyConfig {
   notifyChildSessions: boolean
@@ -27,7 +30,7 @@ interface TerminalInfo {
   processName: string | null
 }
 
-const VALID_MAC_SOUNDS = [
+const VALID_MAC_SOUNDS = new Set([
   "Basso",
   "Blow",
   "Bottle",
@@ -42,7 +45,7 @@ const VALID_MAC_SOUNDS = [
   "Sosumi",
   "Submarine",
   "Tink",
-]
+])
 
 const DEFAULT_CONFIG: NotifyConfig = {
   notifyChildSessions: false,
@@ -73,6 +76,13 @@ const TERMINAL_PROCESS_NAMES: Record<string, string> = {
   "vscode-insiders": "Code - Insiders",
 }
 
+const DEDEPE_MAP_MAX_SIZE = 1000
+const QUESTION_DEDUPE_WINDOW_MS = 1500
+const READY_DEDUPE_WINDOW_MS = 1500
+const PERMISSION_DEDUPE_WINDOW_MS = 1500
+
+type RecentNotifications = Map<string, number>
+
 async function loadConfig(): Promise<NotifyConfig> {
   const configPath = path.join(
     os.homedir(),
@@ -101,10 +111,10 @@ async function loadConfig(): Promise<NotifyConfig> {
       merged.sounds.question,
     ].filter((s): s is string => s !== undefined)
 
-    const invalid = allSounds.filter((s) => !VALID_MAC_SOUNDS.includes(s))
+    const invalid = allSounds.filter((s) => !VALID_MAC_SOUNDS.has(s))
     if (invalid.length > 0) {
       console.error(
-        `[open-notify] Invalid sound name(s) in config: ${invalid.join(", ")}. Valid sounds: ${VALID_MAC_SOUNDS.join(", ")}`,
+        `[open-notify] Invalid sound name(s) in config: ${invalid.join(", ")}. Valid sounds: ${[...VALID_MAC_SOUNDS].join(", ")}`,
       )
     }
 
@@ -134,10 +144,13 @@ async function getFrontmostApp(): Promise<string | null> {
   )
 }
 
-async function detectTerminalInfo(
-  config: NotifyConfig,
-): Promise<TerminalInfo> {
-  const terminalName = config.terminal || detectTerminal() || null
+function detectTerminalInfo(config: NotifyConfig): TerminalInfo {
+  let terminalName: string | null = null
+  try {
+    terminalName = config.terminal || detectTerminal() || null
+  } catch {
+    terminalName = config.terminal || null
+  }
   if (!terminalName) {
     return { name: null, processName: null }
   }
@@ -172,24 +185,6 @@ function isQuietHours(config: NotifyConfig): boolean {
   return currentMinutes >= startMinutes && currentMinutes < endMinutes
 }
 
-async function isParentSession(
-  client: ReturnType<typeof import("@opencode-ai/sdk").createOpencodeClient>,
-  sessionID: string,
-): Promise<boolean> {
-  try {
-    const session = await client.session.get({ path: { id: sessionID } })
-    return !session.data?.parentID
-  } catch {
-    return true
-  }
-}
-
-interface NotificationOptions {
-  title: string
-  message: string
-  sound: string
-}
-
 function escapeAppleScriptString(str: string): string {
   return str
     .replace(/\\/g, "\\\\")
@@ -198,9 +193,15 @@ function escapeAppleScriptString(str: string): string {
     .replace(/\r/g, "")
 }
 
-async function sendMacNotification(
-  options: NotificationOptions,
-): Promise<void> {
+interface NotificationOptions {
+  title: string
+  message: string
+  sound: string
+}
+
+async function sendNotification(options: NotificationOptions): Promise<void> {
+  if (process.platform !== "darwin") return
+
   const { title, message, sound } = options
   const escapedTitle = escapeAppleScriptString(title)
   const escapedMessage = escapeAppleScriptString(message)
@@ -225,17 +226,6 @@ async function sendMacNotification(
   }
 }
 
-async function sendNotification(options: NotificationOptions): Promise<void> {
-  if (process.platform !== "darwin") return
-  await sendMacNotification(options)
-}
-
-const QUESTION_DEDUPE_WINDOW_MS = 1500
-const READY_DEDUPE_WINDOW_MS = 1500
-const PERMISSION_DEDUPE_WINDOW_MS = 1500
-
-type RecentNotifications = Map<string, number>
-
 function toNonEmptyString(value: unknown): string | null {
   if (typeof value !== "string") return null
   const normalized = value.trim()
@@ -249,11 +239,14 @@ function shouldSendDedupedNotification(
   windowMs: number,
   nowMs = Date.now(),
 ): boolean {
-  for (const [key, timestamp] of recentNotifications) {
-    if (nowMs - timestamp >= windowMs) {
-      recentNotifications.delete(key)
+  if (recentNotifications.size > DEDEPE_MAP_MAX_SIZE) {
+    for (const [key, timestamp] of recentNotifications) {
+      if (nowMs - timestamp >= windowMs) {
+        recentNotifications.delete(key)
+      }
     }
   }
+
   const lastSentAt = recentNotifications.get(dedupeKey)
   if (lastSentAt !== undefined && nowMs - lastSentAt < windowMs) {
     return false
@@ -262,27 +255,44 @@ function shouldSendDedupedNotification(
   return true
 }
 
+async function shouldNotify(
+  client: OpencodeClient,
+  sessionID: string,
+  config: NotifyConfig,
+  terminalInfo: TerminalInfo,
+): Promise<boolean> {
+  if (isQuietHours(config)) return false
+  if (await isTerminalFocused(terminalInfo)) return false
+  if (!config.notifyChildSessions) {
+    try {
+      const session = await client.session.get({ path: { id: sessionID } })
+      if (session.data?.parentID) return false
+    } catch {}
+  }
+  return true
+}
+
+async function getSessionTitle(
+  client: OpencodeClient,
+  sessionID: string,
+): Promise<string> {
+  try {
+    const session = await client.session.get({ path: { id: sessionID } })
+    return session.data?.title?.slice(0, 50) ?? "Task"
+  } catch {
+    return "Task"
+  }
+}
+
 async function handleSessionIdle(
-  client: ReturnType<typeof import("@opencode-ai/sdk").createOpencodeClient>,
+  client: OpencodeClient,
   sessionID: string,
   config: NotifyConfig,
   terminalInfo: TerminalInfo,
 ): Promise<void> {
-  if (!config.notifyChildSessions) {
-    const isParent = await isParentSession(client, sessionID)
-    if (!isParent) return
-  }
-  if (isQuietHours(config)) return
-  if (await isTerminalFocused(terminalInfo)) return
+  if (!(await shouldNotify(client, sessionID, config, terminalInfo))) return
 
-  let sessionTitle = "Task"
-  try {
-    const session = await client.session.get({ path: { id: sessionID } })
-    if (session.data?.title) {
-      sessionTitle = session.data.title.slice(0, 50)
-    }
-  } catch {}
-
+  const sessionTitle = await getSessionTitle(client, sessionID)
   await sendNotification({
     title: "Ready for review",
     message: sessionTitle,
@@ -291,18 +301,13 @@ async function handleSessionIdle(
 }
 
 async function handleSessionError(
-  client: ReturnType<typeof import("@opencode-ai/sdk").createOpencodeClient>,
+  client: OpencodeClient,
   sessionID: string,
   error: string | undefined,
   config: NotifyConfig,
   terminalInfo: TerminalInfo,
 ): Promise<void> {
-  if (!config.notifyChildSessions) {
-    const isParent = await isParentSession(client, sessionID)
-    if (!isParent) return
-  }
-  if (isQuietHours(config)) return
-  if (await isTerminalFocused(terminalInfo)) return
+  if (!(await shouldNotify(client, sessionID, config, terminalInfo))) return
 
   const errorMessage = error?.slice(0, 100) || "Something went wrong"
   await sendNotification({
@@ -341,14 +346,12 @@ async function handleQuestionAsked(
 export const OpenNotifyPlugin: Plugin = async (ctx) => {
   const { client } = ctx
   const config = await loadConfig()
-  const terminalInfo = await detectTerminalInfo(config)
+  const terminalInfo = detectTerminalInfo(config)
   const recentQuestionNotifications: RecentNotifications = new Map()
   const recentReadyNotifications: RecentNotifications = new Map()
   const recentPermissionNotifications: RecentNotifications = new Map()
 
-  const opencodeClient = client as ReturnType<
-    typeof import("@opencode-ai/sdk").createOpencodeClient
-  >
+  const opencodeClient = client as OpencodeClient
 
   return {
     "tool.execute.before": async (input: {
@@ -370,16 +373,14 @@ export const OpenNotifyPlugin: Plugin = async (ctx) => {
       }
     },
     event: async ({ event }: { event: Event }): Promise<void> => {
-      const runtimeEvent = event as {
+      const { type, properties } = event as {
         type: string
         properties: Record<string, unknown>
       }
 
-      switch (runtimeEvent.type) {
+      switch (type) {
         case "session.idle": {
-          const sessionID = toNonEmptyString(
-            runtimeEvent.properties.sessionID,
-          )
+          const sessionID = toNonEmptyString(properties.sessionID)
           if (sessionID) {
             const dedupeKey = `session-ready:${sessionID}`
             if (
@@ -400,10 +401,8 @@ export const OpenNotifyPlugin: Plugin = async (ctx) => {
           break
         }
         case "session.error": {
-          const sessionID = toNonEmptyString(
-            runtimeEvent.properties.sessionID,
-          )
-          const error = runtimeEvent.properties.error
+          const sessionID = toNonEmptyString(properties.sessionID)
+          const error = properties.error
           const errorMessage =
             typeof error === "string" ? error : error ? String(error) : undefined
           if (sessionID) {
@@ -419,7 +418,7 @@ export const OpenNotifyPlugin: Plugin = async (ctx) => {
         }
         case "permission.updated":
         case "permission.asked": {
-          const requestId = toNonEmptyString(runtimeEvent.properties.id)
+          const requestId = toNonEmptyString(properties.id)
           const dedupeKey = requestId
             ? `permission:request:${requestId}`
             : null
@@ -436,14 +435,13 @@ export const OpenNotifyPlugin: Plugin = async (ctx) => {
           break
         }
         case "question.asked": {
-          const props = runtimeEvent.properties
-          const sessionID = toNonEmptyString(props.sessionID)
+          const sessionID = toNonEmptyString(properties.sessionID)
           const toolInfo =
-            props.tool && typeof props.tool === "object"
-              ? (props.tool as Record<string, unknown>)
+            properties.tool && typeof properties.tool === "object"
+              ? (properties.tool as Record<string, unknown>)
               : undefined
           const callID = toNonEmptyString(toolInfo?.callID)
-          const requestId = toNonEmptyString(props.id)
+          const requestId = toNonEmptyString(properties.id)
           const dedupeKey = callID
             ? `question:${sessionID}:${callID}`
             : requestId
