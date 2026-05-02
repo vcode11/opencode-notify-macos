@@ -31,7 +31,7 @@ interface TerminalInfo {
   bundleId: string | null
 }
 
-const VALID_MAC_SOUNDS = new Set([
+export const VALID_MAC_SOUNDS = new Set([
   "Basso",
   "Blow",
   "Bottle",
@@ -48,7 +48,7 @@ const VALID_MAC_SOUNDS = new Set([
   "Tink",
 ])
 
-const DEFAULT_CONFIG: NotifyConfig = {
+export const DEFAULT_CONFIG: NotifyConfig = {
   notifyChildSessions: false,
   sounds: {
     idle: "Glass",
@@ -167,7 +167,7 @@ async function getFrontmostBundleId(): Promise<string | null> {
   return stdout
 }
 
-function detectTerminalInfo(config: NotifyConfig): TerminalInfo {
+export function detectTerminalInfo(config: NotifyConfig): TerminalInfo {
   let terminalName: string | null = null
   try {
     terminalName = config.terminal || detectTerminal() || null
@@ -193,7 +193,7 @@ async function isTerminalFocused(
   return frontmost === terminalInfo.bundleId
 }
 
-function isQuietHours(config: NotifyConfig): boolean {
+export function isQuietHours(config: NotifyConfig): boolean {
   if (!config.quietHours.enabled) return false
   const now = new Date()
   const currentMinutes = now.getHours() * 60 + now.getMinutes()
@@ -209,7 +209,7 @@ function isQuietHours(config: NotifyConfig): boolean {
   return currentMinutes >= startMinutes && currentMinutes < endMinutes
 }
 
-function escapeAppleScriptString(str: string): string {
+export function escapeAppleScriptString(str: string): string {
   return str
     .replace(/\\/g, "\\\\")
     .replace(/"/g, '\\"')
@@ -253,14 +253,14 @@ async function sendNotification(options: NotificationOptions): Promise<void> {
   }
 }
 
-function toNonEmptyString(value: unknown): string | null {
+export function toNonEmptyString(value: unknown): string | null {
   if (typeof value !== "string") return null
   const normalized = value.trim()
   if (!normalized) return null
   return normalized
 }
 
-function shouldSendDedupedNotification(
+export function shouldSendDedupedNotification(
   recentNotifications: RecentNotifications,
   dedupeKey: string,
   windowMs: number,
