@@ -5,6 +5,7 @@ import {
   toNonEmptyString,
   shouldSendDedupedNotification,
   detectTerminalInfo,
+  resolveTerminalName,
   VALID_MAC_SOUNDS,
   DEFAULT_CONFIG,
 } from "./index"
@@ -217,6 +218,31 @@ describe("detectTerminalInfo", () => {
     const info = detectTerminalInfo({ ...DEFAULT_CONFIG, terminal: "some-unknown-terminal" })
     expect(info.processName).toBe("some-unknown-terminal")
     expect(info.bundleId).toBeNull()
+  })
+})
+
+describe("resolveTerminalName", () => {
+  test("passes through non-tmux terminal names", () => {
+    expect(resolveTerminalName("ghostty")).toBe("ghostty")
+    expect(resolveTerminalName("wezterm")).toBe("wezterm")
+  })
+
+  test("resolves tmux terminal via tmux list-clients when in tmux", () => {
+    const result = resolveTerminalName("tmux-256color")
+    if (process.env.TMUX) {
+      expect(result).toBe("ghostty")
+    } else {
+      expect(result).toBeNull()
+    }
+  })
+
+  test("resolves screen terminal via tmux list-clients when in tmux", () => {
+    const result = resolveTerminalName("screen-256color")
+    if (process.env.TMUX) {
+      expect(result).toBe("ghostty")
+    } else {
+      expect(result).toBeNull()
+    }
   })
 })
 

@@ -167,10 +167,39 @@ async function getFrontmostBundleId(): Promise<string | null> {
   return stdout
 }
 
+const TMUX_TERMINAL_PREFIXES = ["tmux", "screen"]
+
+export function resolveTerminalName(raw: string): string | null {
+  const lower = raw.toLowerCase()
+  if (!TMUX_TERMINAL_PREFIXES.some((p) => lower.startsWith(p))) {
+    return raw
+  }
+
+  if (process.env.TMUX) {
+    try {
+      const proc = Bun.spawnSync([
+        "tmux",
+        "list-clients",
+        "-F",
+        "#{client_termname}",
+      ])
+      if (proc.exitCode === 0 && proc.stdout) {
+        const output = new TextDecoder().decode(proc.stdout).trim()
+        const firstLine = output.split("\n")[0] ?? ""
+        const cleaned = firstLine.replace(/^xterm-/, "")
+        if (cleaned) return cleaned
+      }
+    } catch {}
+  }
+
+  return null
+}
+
 export function detectTerminalInfo(config: NotifyConfig): TerminalInfo {
   let terminalName: string | null = null
   try {
-    terminalName = config.terminal || detectTerminal() || null
+    const raw = config.terminal || detectTerminal() || null
+    terminalName = raw ? resolveTerminalName(raw) : null
   } catch {
     terminalName = config.terminal || null
   }

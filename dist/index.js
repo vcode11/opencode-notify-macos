@@ -116,10 +116,37 @@ async function getFrontmostBundleId() {
     return null;
   return stdout;
 }
+var TMUX_TERMINAL_PREFIXES = ["tmux", "screen"];
+function resolveTerminalName(raw) {
+  const lower = raw.toLowerCase();
+  if (!TMUX_TERMINAL_PREFIXES.some((p) => lower.startsWith(p))) {
+    return raw;
+  }
+  if (process.env.TMUX) {
+    try {
+      const proc = Bun.spawnSync([
+        "tmux",
+        "list-clients",
+        "-F",
+        "#{client_termname}"
+      ]);
+      if (proc.exitCode === 0 && proc.stdout) {
+        const output = new TextDecoder().decode(proc.stdout).trim();
+        const firstLine = output.split(`
+`)[0] ?? "";
+        const cleaned = firstLine.replace(/^xterm-/, "");
+        if (cleaned)
+          return cleaned;
+      }
+    } catch {}
+  }
+  return null;
+}
 function detectTerminalInfo(config) {
   let terminalName = null;
   try {
-    terminalName = config.terminal || detectTerminal() || null;
+    const raw = config.terminal || detectTerminal() || null;
+    terminalName = raw ? resolveTerminalName(raw) : null;
   } catch {
     terminalName = config.terminal || null;
   }
@@ -335,6 +362,7 @@ var src_default = OpenNotifyPlugin;
 export {
   toNonEmptyString,
   shouldSendDedupedNotification,
+  resolveTerminalName,
   isQuietHours,
   escapeAppleScriptString,
   detectTerminalInfo,
