@@ -168,14 +168,11 @@ function detectTerminalInfo(config) {
   return { name: terminalName, processName, bundleId };
 }
 async function isTerminalFocused(terminalInfo) {
-  if (!terminalInfo.bundleId) {
-    console.log(`[open-notify] isTerminalFocused: no bundleId, returning false`);
+  if (!terminalInfo.bundleId)
     return false;
-  }
   if (process.platform !== "darwin")
     return false;
   const frontmost = await getFrontmostBundleId();
-  console.log(`[open-notify] isTerminalFocused: frontmost="${frontmost}" terminal="${terminalInfo.bundleId}" match=${frontmost === terminalInfo.bundleId}`);
   if (!frontmost)
     return false;
   return frontmost === terminalInfo.bundleId;
@@ -249,7 +246,6 @@ async function shouldNotify(client, sessionID, config, terminalInfo) {
   if (isQuietHours(config))
     return false;
   const focused = await isTerminalFocused(terminalInfo);
-  console.log(`[open-notify] shouldNotify: focused=${focused} bundleId=${terminalInfo.bundleId}`);
   if (focused)
     return false;
   if (!config.notifyChildSessions) {
