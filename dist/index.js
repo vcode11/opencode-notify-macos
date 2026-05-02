@@ -107,14 +107,21 @@ async function runCommand(command) {
 async function getFrontmostBundleId() {
   if (process.platform !== "darwin")
     return null;
-  const { stdout, exitCode } = await runCommand([
-    "bash",
-    "-c",
-    `FRONT=$(lsappinfo front 2>/dev/null); [ -n "$FRONT" ] && lsappinfo info "$FRONT" 2>/dev/null | sed -n 's/.*bundleID="\\([^"]*\\)".*/\\1/p' | head -1`
+  const { stdout: frontASN, exitCode: ec1 } = await runCommand([
+    "lsappinfo",
+    "front"
   ]);
-  if (exitCode !== 0 || !stdout)
+  if (ec1 !== 0 || !frontASN)
     return null;
-  return stdout;
+  const { stdout: info, exitCode: ec2 } = await runCommand([
+    "lsappinfo",
+    "info",
+    frontASN
+  ]);
+  if (ec2 !== 0 || !info)
+    return null;
+  const match = info.match(/bundleID="([^"]+)"/);
+  return match?.[1] ?? null;
 }
 var TMUX_TERMINAL_PREFIXES = ["tmux", "screen"];
 var defaultTmuxResolver = () => {
@@ -161,11 +168,14 @@ function detectTerminalInfo(config) {
   return { name: terminalName, processName, bundleId };
 }
 async function isTerminalFocused(terminalInfo) {
-  if (!terminalInfo.bundleId)
+  if (!terminalInfo.bundleId) {
+    console.log(`[open-notify] isTerminalFocused: no bundleId, returning false`);
     return false;
+  }
   if (process.platform !== "darwin")
     return false;
   const frontmost = await getFrontmostBundleId();
+  console.log(`[open-notify] isTerminalFocused: frontmost="${frontmost}" terminal="${terminalInfo.bundleId}" match=${frontmost === terminalInfo.bundleId}`);
   if (!frontmost)
     return false;
   return frontmost === terminalInfo.bundleId;
@@ -238,7 +248,9 @@ function shouldSendDedupedNotification(recentNotifications, dedupeKey, windowMs,
 async function shouldNotify(client, sessionID, config, terminalInfo) {
   if (isQuietHours(config))
     return false;
-  if (await isTerminalFocused(terminalInfo))
+  const focused = await isTerminalFocused(terminalInfo);
+  console.log(`[open-notify] shouldNotify: focused=${focused} bundleId=${terminalInfo.bundleId}`);
+  if (focused)
     return false;
   if (!config.notifyChildSessions) {
     try {

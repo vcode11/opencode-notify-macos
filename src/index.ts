@@ -157,14 +157,21 @@ async function runCommand(
 async function getFrontmostBundleId(): Promise<string | null> {
   if (process.platform !== "darwin") return null
 
-  const { stdout, exitCode } = await runCommand([
-    "bash",
-    "-c",
-    'FRONT=$(lsappinfo front 2>/dev/null); [ -n "$FRONT" ] && lsappinfo info "$FRONT" 2>/dev/null | sed -n \'s/.*bundleID="\\([^"]*\\)".*/\\1/p\' | head -1',
+  const { stdout: frontASN, exitCode: ec1 } = await runCommand([
+    "lsappinfo",
+    "front",
   ])
-  if (exitCode !== 0 || !stdout) return null
+  if (ec1 !== 0 || !frontASN) return null
 
-  return stdout
+  const { stdout: info, exitCode: ec2 } = await runCommand([
+    "lsappinfo",
+    "info",
+    frontASN,
+  ])
+  if (ec2 !== 0 || !info) return null
+
+  const match = info.match(/bundleID="([^"]+)"/)
+  return match?.[1] ?? null
 }
 
 const TMUX_TERMINAL_PREFIXES = ["tmux", "screen"]
@@ -223,9 +230,13 @@ export function detectTerminalInfo(config: NotifyConfig): TerminalInfo {
 async function isTerminalFocused(
   terminalInfo: TerminalInfo,
 ): Promise<boolean> {
-  if (!terminalInfo.bundleId) return false
+  if (!terminalInfo.bundleId) {
+    console.log(`[open-notify] isTerminalFocused: no bundleId, returning false`)
+    return false
+  }
   if (process.platform !== "darwin") return false
   const frontmost = await getFrontmostBundleId()
+  console.log(`[open-notify] isTerminalFocused: frontmost="${frontmost}" terminal="${terminalInfo.bundleId}" match=${frontmost === terminalInfo.bundleId}`)
   if (!frontmost) return false
   return frontmost === terminalInfo.bundleId
 }
@@ -326,7 +337,9 @@ async function shouldNotify(
   terminalInfo: TerminalInfo,
 ): Promise<boolean> {
   if (isQuietHours(config)) return false
-  if (await isTerminalFocused(terminalInfo)) return false
+  const focused = await isTerminalFocused(terminalInfo)
+  console.log(`[open-notify] shouldNotify: focused=${focused} bundleId=${terminalInfo.bundleId}`)
+  if (focused) return false
   if (!config.notifyChildSessions) {
     try {
       const session = await client.session.get({ path: { id: sessionID } })
