@@ -78,7 +78,7 @@ const TERMINAL_PROCESS_NAMES: Record<string, string> = {
 }
 
 const TERMINAL_BUNDLE_IDS: Record<string, string> = {
-  Ghostty: "com.mitchellh.ghostty",
+  Ghostty: "com.mitchh.ghostty",
   kitty: "net.kovidgoyal.kitty",
   iTerm2: "com.googlecode.iterm2",
   WezTerm: "com.github.wez.wezterm",

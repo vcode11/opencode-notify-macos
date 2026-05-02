@@ -47,7 +47,7 @@ var TERMINAL_PROCESS_NAMES = {
   "vscode-insiders": "Code - Insiders"
 };
 var TERMINAL_BUNDLE_IDS = {
-  Ghostty: "com.mitchellh.ghostty",
+  Ghostty: "com.mitchh.ghostty",
   kitty: "net.kovidgoyal.kitty",
   iTerm2: "com.googlecode.iterm2",
   WezTerm: "com.github.wez.wezterm",
