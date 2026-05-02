@@ -33,5 +33,6 @@
     "notifications",
     "macos"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "files": ["dist/"]
 }
