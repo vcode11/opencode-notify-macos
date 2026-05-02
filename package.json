@@ -12,7 +12,7 @@
     "entry": "dist/index.js"
   },
   "scripts": {
-    "build": "bun build src/index.ts --outdir dist --target node --external detect-terminal --external @opencode-ai/plugin --external @opencode-ai/sdk && tsc --emitDeclarationOnly",
+    "build": "bun build src/entry.ts --outfile dist/index.js --target node --external detect-terminal --external @opencode-ai/plugin --external @opencode-ai/sdk && tsc --emitDeclarationOnly",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "bun run build"
   },
