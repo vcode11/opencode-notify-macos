@@ -199,7 +199,7 @@ describe("detectTerminalInfo", () => {
     const info = detectTerminalInfo({ ...DEFAULT_CONFIG, terminal: "ghostty" })
     expect(info.name).toBe("ghostty")
     expect(info.processName).toBe("Ghostty")
-    expect(info.bundleId).toBe("com.mitchh.ghostty")
+    expect(info.bundleId).toBe("com.mitchellh.ghostty")
   })
 
   test("maps iTerm2 correctly", () => {

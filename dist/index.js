@@ -47,7 +47,7 @@ var TERMINAL_PROCESS_NAMES = {
   "vscode-insiders": "Code - Insiders"
 };
 var TERMINAL_BUNDLE_IDS = {
-  Ghostty: "com.mitchh.ghostty",
+  Ghostty: "com.mitchellh.ghostty",
   kitty: "net.kovidgoyal.kitty",
   iTerm2: "com.googlecode.iterm2",
   WezTerm: "com.github.wez.wezterm",
@@ -110,7 +110,7 @@ async function getFrontmostBundleId() {
   const { stdout, exitCode } = await runCommand([
     "bash",
     "-c",
-    `FRONT=$(lsappinfo front 2>/dev/null); [ -n "$FRONT" ] && lsappinfo info "$FRONT" 2>/dev/null | grep -o 'bundleID="[^"]*"'> /dev/stdout | head -1 | tr -d bundleID= | tr -d '"'`
+    `FRONT=$(lsappinfo front 2>/dev/null); [ -n "$FRONT" ] && lsappinfo info "$FRONT" 2>/dev/null | sed -n 's/.*bundleID="\\([^"]*\\)".*/\\1/p' | head -1`
   ]);
   if (exitCode !== 0 || !stdout)
     return null;
