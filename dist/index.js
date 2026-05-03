@@ -62,6 +62,11 @@ var DEDEPE_MAP_MAX_SIZE = 1000;
 var QUESTION_DEDUPE_WINDOW_MS = 1500;
 var READY_DEDUPE_WINDOW_MS = 1500;
 var PERMISSION_DEDUPE_WINDOW_MS = 1500;
+var TERMINAL_OSC777 = new Set(["kitty", "wezterm", "foot", "warp"]);
+var TERMINAL_OSC9 = new Set(["ghostty", "iterm", "iterm2"]);
+var TERMINAL_ST_TERMINATOR = new Set(["ghostty", "kitty", "wezterm"]);
+var TERMINAL_OSC99 = new Set(["kitty"]);
+var TERMINAL_BEL = new Set(["warp", "iterm", "iterm2"]);
 async function loadConfig() {
   const configPath = path.join(os.homedir(), ".config", "opencode", "open-notify.json");
   try {
@@ -155,12 +160,12 @@ function resolveTerminalName(raw, resolveTmux = defaultTmuxResolver) {
 function detectTerminalInfo(config) {
   let terminalName = null;
   try {
-    const raw = config.terminal || detectTerminal() || null;
+    const raw = config.terminal || detectTerminal({ preferOuter: true }) || null;
     terminalName = raw ? resolveTerminalName(raw) : null;
   } catch {
     terminalName = config.terminal || null;
   }
-  if (!terminalName) {
+  if (!terminalName || terminalName === "unknown") {
     return { name: null, processName: null, bundleId: null };
   }
   const processName = TERMINAL_PROCESS_NAMES[terminalName.toLowerCase()] || terminalName;
@@ -197,7 +202,31 @@ function escapeAppleScriptString(str) {
 async function sendNotification(options) {
   if (process.platform !== "darwin")
     return;
-  const { title, message, sound } = options;
+  const { title, message, sound, bundleId, processName } = options;
+  const lowerName = (processName || "").toLowerCase();
+  const useOsc = TERMINAL_OSC777.has(lowerName) || TERMINAL_OSC9.has(lowerName);
+  if (useOsc) {
+    const escapedMessage2 = message.replace(/\\/g, "\\\\").replace(/"/g, "\\\"").replace(/\n/g, " ").replace(/\r/g, "");
+    const escapedTitle2 = title.replace(/\\/g, "\\\\").replace(/"/g, "\\\"").replace(/\n/g, " ").replace(/\r/g, "");
+    const useSt = TERMINAL_ST_TERMINATOR.has(lowerName);
+    const terminator = useSt ? "\x1B\\" : "\x07";
+    let oscCommand;
+    if (TERMINAL_OSC99.has(lowerName)) {
+      oscCommand = `printf '\\033]99;;%s\\033\\\\' "${escapedTitle2}"`;
+    } else if (TERMINAL_OSC777.has(lowerName)) {
+      oscCommand = `printf '\\033]777;notify;%s;%s${terminator}' "${escapedTitle2}" "${escapedMessage2}"`;
+    } else {
+      const stTerm = useSt ? "\\033\\\\" : "\\007";
+      oscCommand = `printf '\\033]9;%s: %s${stTerm}' "${escapedTitle2}" "${escapedMessage2}"`;
+    }
+    try {
+      const proc = Bun.spawn(["bash", "-c", oscCommand], { stdout: "inherit", stderr: "pipe" });
+      await proc.exited;
+    } catch (err) {
+      console.error("[open-notify] OSC notification failed:", err);
+    }
+    return;
+  }
   const escapedTitle = escapeAppleScriptString(title);
   const escapedMessage = escapeAppleScriptString(message);
   const escapedSound = escapeAppleScriptString(sound);
@@ -224,13 +253,22 @@ function toNonEmptyString(value) {
     return null;
   return normalized;
 }
-function shouldSendDedupedNotification(recentNotifications, dedupeKey, windowMs, nowMs = Date.now()) {
-  if (recentNotifications.size > DEDEPE_MAP_MAX_SIZE) {
-    for (const [key, timestamp] of recentNotifications) {
-      if (nowMs - timestamp >= windowMs) {
-        recentNotifications.delete(key);
-      }
+function cleanupOldEntries(recentNotifications, windowMs, nowMs) {
+  for (const [key, timestamp] of recentNotifications) {
+    if (nowMs - timestamp >= windowMs) {
+      recentNotifications.delete(key);
     }
+  }
+}
+var lastCleanup = 0;
+var CLEANUP_INTERVAL_MS = 5000;
+function shouldSendDedupedNotification(recentNotifications, dedupeKey, windowMs, nowMs = Date.now()) {
+  if (nowMs - lastCleanup > CLEANUP_INTERVAL_MS) {
+    cleanupOldEntries(recentNotifications, windowMs, nowMs);
+    lastCleanup = nowMs;
+  }
+  if (recentNotifications.size > DEDEPE_MAP_MAX_SIZE) {
+    cleanupOldEntries(recentNotifications, windowMs, nowMs);
   }
   const lastSentAt = recentNotifications.get(dedupeKey);
   if (lastSentAt !== undefined && nowMs - lastSentAt < windowMs) {
@@ -240,16 +278,19 @@ function shouldSendDedupedNotification(recentNotifications, dedupeKey, windowMs,
   return true;
 }
 async function shouldNotify(client, sessionID, config, terminalInfo) {
-  if (isQuietHours(config))
+  if (isQuietHours(config)) {
     return false;
+  }
   const focused = await isTerminalFocused(terminalInfo);
-  if (focused)
+  if (focused) {
     return false;
+  }
   if (!config.notifyChildSessions) {
     try {
       const session = await client.session.get({ path: { id: sessionID } });
-      if (session.data?.parentID)
+      if (session.data?.parentID) {
         return false;
+      }
     } catch {}
   }
   return true;
@@ -269,7 +310,9 @@ async function handleSessionIdle(client, sessionID, config, terminalInfo) {
   await sendNotification({
     title: "Ready for review",
     message: sessionTitle,
-    sound: config.sounds.idle
+    sound: config.sounds.idle,
+    bundleId: terminalInfo.bundleId,
+    processName: terminalInfo.processName
   });
 }
 async function handleSessionError(client, sessionID, error, config, terminalInfo) {
@@ -279,7 +322,9 @@ async function handleSessionError(client, sessionID, error, config, terminalInfo
   await sendNotification({
     title: "Something went wrong",
     message: errorMessage,
-    sound: config.sounds.error
+    sound: config.sounds.error,
+    bundleId: terminalInfo.bundleId,
+    processName: terminalInfo.processName
   });
 }
 async function handlePermissionUpdated(config, terminalInfo) {
@@ -290,7 +335,9 @@ async function handlePermissionUpdated(config, terminalInfo) {
   await sendNotification({
     title: "Waiting for you",
     message: "OpenCode needs your input",
-    sound: config.sounds.permission
+    sound: config.sounds.permission,
+    bundleId: terminalInfo.bundleId,
+    processName: terminalInfo.processName
   });
 }
 async function handleQuestionAsked(config, terminalInfo) {
@@ -300,26 +347,20 @@ async function handleQuestionAsked(config, terminalInfo) {
   await sendNotification({
     title: "Question for you",
     message: "OpenCode needs your input",
-    sound
+    sound,
+    bundleId: terminalInfo.bundleId,
+    processName: terminalInfo.processName
   });
 }
 var OpenNotifyPlugin = async (ctx) => {
   const { client } = ctx;
   const config = await loadConfig();
   const terminalInfo = detectTerminalInfo(config);
+  const opencodeClient = client;
   const recentQuestionNotifications = new Map;
   const recentReadyNotifications = new Map;
   const recentPermissionNotifications = new Map;
-  const opencodeClient = client;
   return {
-    "tool.execute.before": async (input) => {
-      if (input.tool === "question") {
-        const dedupeKey = `question:${input.sessionID}:${input.callID}`;
-        if (shouldSendDedupedNotification(recentQuestionNotifications, dedupeKey, QUESTION_DEDUPE_WINDOW_MS)) {
-          await handleQuestionAsked(config, terminalInfo);
-        }
-      }
-    },
     event: async ({ event }) => {
       const { type, properties } = event;
       switch (type) {
@@ -345,14 +386,16 @@ var OpenNotifyPlugin = async (ctx) => {
         case "permission.updated":
         case "permission.asked": {
           const requestId = toNonEmptyString(properties.id);
-          const dedupeKey = requestId ? `permission:request:${requestId}` : null;
-          if (!dedupeKey || shouldSendDedupedNotification(recentPermissionNotifications, dedupeKey, PERMISSION_DEDUPE_WINDOW_MS)) {
+          const dedupeKey = requestId ? `permission:request:${requestId}` : `permission:timestamp:${Date.now()}`;
+          if (shouldSendDedupedNotification(recentPermissionNotifications, dedupeKey, PERMISSION_DEDUPE_WINDOW_MS)) {
             await handlePermissionUpdated(config, terminalInfo);
           }
           break;
         }
         case "question.asked": {
           const sessionID = toNonEmptyString(properties.sessionID);
+          if (!sessionID)
+            break;
           const toolInfo = properties.tool && typeof properties.tool === "object" ? properties.tool : undefined;
           const callID = toNonEmptyString(toolInfo?.callID);
           const requestId = toNonEmptyString(properties.id);

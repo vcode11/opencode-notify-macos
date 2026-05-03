@@ -95,6 +95,12 @@ const QUESTION_DEDUPE_WINDOW_MS = 1500
 const READY_DEDUPE_WINDOW_MS = 1500
 const PERMISSION_DEDUPE_WINDOW_MS = 1500
 
+const TERMINAL_OSC777 = new Set(["kitty", "wezterm", "foot", "warp"])
+const TERMINAL_OSC9 = new Set(["ghostty", "iterm", "iterm2"])
+const TERMINAL_ST_TERMINATOR = new Set(["ghostty", "kitty", "wezterm"])
+const TERMINAL_OSC99 = new Set(["kitty"])
+const TERMINAL_BEL = new Set(["warp", "iterm", "iterm2"])
+
 type RecentNotifications = Map<string, number>
 
 async function loadConfig(): Promise<NotifyConfig> {
@@ -213,12 +219,12 @@ export function resolveTerminalName(
 export function detectTerminalInfo(config: NotifyConfig): TerminalInfo {
   let terminalName: string | null = null
   try {
-    const raw = config.terminal || detectTerminal() || null
+    const raw = config.terminal || detectTerminal({ preferOuter: true }) || null
     terminalName = raw ? resolveTerminalName(raw) : null
   } catch {
     terminalName = config.terminal || null
   }
-  if (!terminalName) {
+  if (!terminalName || terminalName === "unknown") {
     return { name: null, processName: null, bundleId: null }
   }
   const processName =
@@ -265,12 +271,44 @@ interface NotificationOptions {
   title: string
   message: string
   sound: string
+  bundleId: string | null
+  processName: string | null
 }
 
 async function sendNotification(options: NotificationOptions): Promise<void> {
   if (process.platform !== "darwin") return
 
-  const { title, message, sound } = options
+  const { title, message, sound, bundleId, processName } = options
+
+  const lowerName = (processName || "").toLowerCase()
+  const useOsc = TERMINAL_OSC777.has(lowerName) || TERMINAL_OSC9.has(lowerName)
+
+  if (useOsc) {
+    const escapedMessage = message.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, " ").replace(/\r/g, "")
+    const escapedTitle = title.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, " ").replace(/\r/g, "")
+    const useSt = TERMINAL_ST_TERMINATOR.has(lowerName)
+    const terminator = useSt ? "\x1B\\" : "\x07"
+
+    let oscCommand: string
+
+    if (TERMINAL_OSC99.has(lowerName)) {
+      oscCommand = `printf '\\033]99;;%s\\033\\\\' "${escapedTitle}"`
+    } else if (TERMINAL_OSC777.has(lowerName)) {
+      oscCommand = `printf '\\033]777;notify;%s;%s${terminator}' "${escapedTitle}" "${escapedMessage}"`
+    } else {
+      const stTerm = useSt ? "\\033\\\\" : "\\007"
+      oscCommand = `printf '\\033]9;%s: %s${stTerm}' "${escapedTitle}" "${escapedMessage}"`
+    }
+
+    try {
+      const proc = Bun.spawn(["bash", "-c", oscCommand], { stdout: "inherit", stderr: "pipe" })
+      await proc.exited
+    } catch (err) {
+      console.error("[open-notify] OSC notification failed:", err)
+    }
+    return
+  }
+
   const escapedTitle = escapeAppleScriptString(title)
   const escapedMessage = escapeAppleScriptString(message)
   const escapedSound = escapeAppleScriptString(sound)
@@ -301,18 +339,34 @@ export function toNonEmptyString(value: unknown): string | null {
   return normalized
 }
 
+function cleanupOldEntries(
+  recentNotifications: RecentNotifications,
+  windowMs: number,
+  nowMs: number,
+): void {
+  for (const [key, timestamp] of recentNotifications) {
+    if (nowMs - timestamp >= windowMs) {
+      recentNotifications.delete(key)
+    }
+  }
+}
+
+let lastCleanup = 0
+const CLEANUP_INTERVAL_MS = 5000
+
 export function shouldSendDedupedNotification(
   recentNotifications: RecentNotifications,
   dedupeKey: string,
   windowMs: number,
   nowMs = Date.now(),
 ): boolean {
+  if (nowMs - lastCleanup > CLEANUP_INTERVAL_MS) {
+    cleanupOldEntries(recentNotifications, windowMs, nowMs)
+    lastCleanup = nowMs
+  }
+
   if (recentNotifications.size > DEDEPE_MAP_MAX_SIZE) {
-    for (const [key, timestamp] of recentNotifications) {
-      if (nowMs - timestamp >= windowMs) {
-        recentNotifications.delete(key)
-      }
-    }
+    cleanupOldEntries(recentNotifications, windowMs, nowMs)
   }
 
   const lastSentAt = recentNotifications.get(dedupeKey)
@@ -329,13 +383,19 @@ async function shouldNotify(
   config: NotifyConfig,
   terminalInfo: TerminalInfo,
 ): Promise<boolean> {
-  if (isQuietHours(config)) return false
+  if (isQuietHours(config)) {
+    return false
+  }
   const focused = await isTerminalFocused(terminalInfo)
-  if (focused) return false
+  if (focused) {
+    return false
+  }
   if (!config.notifyChildSessions) {
     try {
       const session = await client.session.get({ path: { id: sessionID } })
-      if (session.data?.parentID) return false
+      if (session.data?.parentID) {
+        return false
+      }
     } catch {}
   }
   return true
@@ -366,6 +426,8 @@ async function handleSessionIdle(
     title: "Ready for review",
     message: sessionTitle,
     sound: config.sounds.idle,
+    bundleId: terminalInfo.bundleId,
+    processName: terminalInfo.processName,
   })
 }
 
@@ -383,6 +445,8 @@ async function handleSessionError(
     title: "Something went wrong",
     message: errorMessage,
     sound: config.sounds.error,
+    bundleId: terminalInfo.bundleId,
+    processName: terminalInfo.processName,
   })
 }
 
@@ -396,6 +460,8 @@ async function handlePermissionUpdated(
     title: "Waiting for you",
     message: "OpenCode needs your input",
     sound: config.sounds.permission,
+    bundleId: terminalInfo.bundleId,
+    processName: terminalInfo.processName,
   })
 }
 
@@ -409,6 +475,8 @@ async function handleQuestionAsked(
     title: "Question for you",
     message: "OpenCode needs your input",
     sound,
+    bundleId: terminalInfo.bundleId,
+    processName: terminalInfo.processName,
   })
 }
 
@@ -416,31 +484,12 @@ export const OpenNotifyPlugin: Plugin = async (ctx) => {
   const { client } = ctx
   const config = await loadConfig()
   const terminalInfo = detectTerminalInfo(config)
+  const opencodeClient = client as OpencodeClient
   const recentQuestionNotifications: RecentNotifications = new Map()
   const recentReadyNotifications: RecentNotifications = new Map()
   const recentPermissionNotifications: RecentNotifications = new Map()
 
-  const opencodeClient = client as OpencodeClient
-
   return {
-    "tool.execute.before": async (input: {
-      tool: string
-      sessionID: string
-      callID: string
-    }) => {
-      if (input.tool === "question") {
-        const dedupeKey = `question:${input.sessionID}:${input.callID}`
-        if (
-          shouldSendDedupedNotification(
-            recentQuestionNotifications,
-            dedupeKey,
-            QUESTION_DEDUPE_WINDOW_MS,
-          )
-        ) {
-          await handleQuestionAsked(config, terminalInfo)
-        }
-      }
-    },
     event: async ({ event }: { event: Event }): Promise<void> => {
       const { type, properties } = event as {
         type: string
@@ -490,9 +539,8 @@ export const OpenNotifyPlugin: Plugin = async (ctx) => {
           const requestId = toNonEmptyString(properties.id)
           const dedupeKey = requestId
             ? `permission:request:${requestId}`
-            : null
+            : `permission:timestamp:${Date.now()}`
           if (
-            !dedupeKey ||
             shouldSendDedupedNotification(
               recentPermissionNotifications,
               dedupeKey,
@@ -505,6 +553,7 @@ export const OpenNotifyPlugin: Plugin = async (ctx) => {
         }
         case "question.asked": {
           const sessionID = toNonEmptyString(properties.sessionID)
+          if (!sessionID) break
           const toolInfo =
             properties.tool && typeof properties.tool === "object"
               ? (properties.tool as Record<string, unknown>)
