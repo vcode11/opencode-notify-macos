@@ -1,6 +1,6 @@
 {
   "name": "opencode-notify-macos",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Native macOS notifications for OpenCode – simple, secure, no extra dependencies",
   "type": "module",
   "main": "dist/index.js",
@@ -34,5 +34,7 @@
     "macos"
   ],
   "license": "MIT",
-  "files": ["dist/"]
+  "files": [
+    "dist/"
+  ]
 }
